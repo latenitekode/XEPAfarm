@@ -20,6 +20,7 @@ import cv2
 import rainbowtext
 from inputimeout import inputimeout, TimeoutOccurred
 from pathlib import PureWindowsPath
+from PIL import Image
 from pynput.keyboard import Key, Controller
 
 # The screen checks use None to represent a template that is not visible.
@@ -28,6 +29,44 @@ pyautogui.useImageNotFoundException(False)
 
 def resource_path(relative_path):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
+
+def load_button_label(filename, box):
+    with Image.open(resource_path(f'ss/{filename}')) as image:
+        return image.crop(box)
+
+
+ready_label = load_button_label('notready.png', (117, 39, 256, 75))
+cancel_label = load_button_label('matchmaking.png', (102, 39, 269, 75))
+
+
+def find_lobby_button(window, label):
+    if not window or win32gui.GetForegroundWindow() != window:
+        return None
+
+    try:
+        _, _, width, height = win32gui.GetClientRect(window)
+        left, top = win32gui.ClientToScreen(window, (0, 0))
+    except win32gui.error:
+        return None
+
+    # The Ready button can be at the left or in the center of the lobby footer.
+    scale_x, scale_y = width / 1920, height / 1080
+    search_width, search_height = 1220, 209
+    search_top = top + round(856 * scale_y)
+    region_width = round(search_width * scale_x)
+    region_height = round(search_height * scale_y)
+    if not region_width or not region_height:
+        return None
+
+    with pyautogui.screenshot(region=(left, search_top, region_width, region_height)) as screenshot:
+        with screenshot.resize((search_width, search_height), Image.Resampling.BICUBIC) as normalized:
+            match = pyautogui.locate(label, normalized, grayscale=True, confidence=0.78)
+    if match is None:
+        return None
+
+    x, y = pyautogui.center(match)
+    return left + round(x * scale_x), search_top + round(y * scale_y)
 
 
 if sys.argv[1:] == ['--build-check']:
@@ -347,7 +386,7 @@ while True:
                     pyautogui.click(coords_auto_fill_x,coords_auto_fill_y)
                     time.sleep(2)
                     pyautogui.moveTo(200,100)
-        if (pyautogui.locateOnScreen(resource_path('ss\\team.png'), region=(team_coords), grayscale=True, confidence=0.9) is None) and (pyautogui.locateOnScreen(resource_path('ss\\notready.png'), region=(0,538,447,528), grayscale=True, confidence=0.7) != None):
+        if (pyautogui.locateOnScreen(resource_path('ss\\team.png'), region=(team_coords), grayscale=True, confidence=0.9) is None) and find_lobby_button(apex_hwnd, ready_label) is not None:
             time.sleep(1)
             print(UP, end=CLEAR)
             print ('-------------------------------------------READY TO FARM-------------------------------------------')
@@ -417,39 +456,40 @@ while True:
             time_lapsed_absolute = end_time_absolute - start_time_absolute
             
             #starting matchmaking
+            cancel_button = find_lobby_button(apex_hwnd, cancel_label)
             if time_lapsed > timp:
                 pyautogui.click(200, 100)
-            elif (pyautogui.locateOnScreen(resource_path('ss\\notready.png'), region=(0,856,482,209), confidence=0.5) != None) and (time_lapsed < timp):
-                pyautogui.moveTo(230,950)
-                pyautogui.click(230,950)
-                time.sleep(np.random.uniform(0.3,0.8))
-                pyautogui.moveTo(200,100)
-                time.sleep(0.1)
+            elif cancel_button is None and time_lapsed < timp:
+                ready_button = find_lobby_button(apex_hwnd, ready_label)
+                if ready_button is not None:
+                    pyautogui.click(*ready_button)
+                    time.sleep(np.random.uniform(0.3,0.8))
+                    pyautogui.moveTo(200,100)
+                    time.sleep(0.1)
             
-            if (pyautogui.locateOnScreen(resource_path('ss\\matchmaking.png'), region=(0,856,482,209), confidence=0.5) != None) and (matchmaking == 0):
+            if cancel_button is not None and matchmaking == 0:
                 matchmaking=1
                 timer_matchmaking_start=time.time()
+                print('Matchmaking started.', flush=True)
             while matchmaking==1:
                 #print(timer_matchmaking)
                 timer_matchmaking_end=time.time()
                 time.sleep(0.05)
                 timer_matchmaking=timer_matchmaking_end-timer_matchmaking_start
-                if (pyautogui.locateOnScreen(resource_path('ss\\matchmaking.png'), region=(0,856,482,209), confidence=0.5) != None) and (timer_matchmaking>240):
-                    pyautogui.moveTo(230,950)
-                    pyautogui.click(230,950)
+                cancel_button = find_lobby_button(apex_hwnd, cancel_label)
+                if cancel_button is None:
+                    matchmaking=0
+                    timer_matchmaking=0
+                    break
+                if timer_matchmaking > 240:
+                    pyautogui.click(*cancel_button)
                     time.sleep(np.random.uniform(0.3,0.8))
                     pyautogui.moveTo(200,100)
                     time.sleep(0.1)
                     matchmaking=0
                     timer_matchmaking=0
                     break
-                elif pyautogui.locateOnScreen(resource_path('ss\\matchmaking.png'), region=(0,856,482,209), confidence=0.5) != None:
-                    time.sleep(1)
-
-                elif pyautogui.locateOnScreen(resource_path('ss\\matchmaking.png'), region=(0,856,482,209), confidence=0.5) is None:
-                    matchmaking=0
-                    timer_matchmaking=0
-                    break
+                time.sleep(1)
             if pyautogui.locateOnScreen(resource_path('ss\\champselect.png'), region=(1640,644,98,81),grayscale=True, confidence=0.7) != None:
                 if champion not in champ_list:
                     pass
