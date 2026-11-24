@@ -6,6 +6,8 @@ import pyautogui
 import time
 import keyboard
 import random
+import re
+import shutil
 import subprocess
 import os
 import numpy as np
@@ -40,7 +42,7 @@ ready_label = load_button_label('notready.png', (117, 39, 256, 75))
 cancel_label = load_button_label('matchmaking.png', (102, 39, 269, 75))
 
 
-def find_lobby_button(window, label):
+def active_window_geometry(window):
     if not window or win32gui.GetForegroundWindow() != window:
         return None
 
@@ -49,24 +51,130 @@ def find_lobby_button(window, label):
         left, top = win32gui.ClientToScreen(window, (0, 0))
     except win32gui.error:
         return None
+    if width <= 0 or height <= 0:
+        return None
+    return left, top, width / 1920, height / 1080
 
-    # The Ready button can be at the left or in the center of the lobby footer.
-    scale_x, scale_y = width / 1920, height / 1080
-    search_width, search_height = 1220, 209
-    search_top = top + round(856 * scale_y)
-    region_width = round(search_width * scale_x)
-    region_height = round(search_height * scale_y)
-    if not region_width or not region_height:
+
+def window_region(geometry, reference_region):
+    left, top, scale_x, scale_y = geometry
+    x, y, width, height = reference_region
+    return (left + round(x * scale_x), top + round(y * scale_y),
+            max(1, round(width * scale_x)), max(1, round(height * scale_y)))
+
+
+def find_lobby_button(window, label):
+    geometry = active_window_geometry(window)
+    if geometry is None:
         return None
 
-    with pyautogui.screenshot(region=(left, search_top, region_width, region_height)) as screenshot:
+    # The Ready button can be at the left or in the center of the lobby footer.
+    search_width, search_height = 1220, 209
+    region = window_region(geometry, (0, 856, search_width, search_height))
+
+    with pyautogui.screenshot(region=region) as screenshot:
         with screenshot.resize((search_width, search_height), Image.Resampling.BICUBIC) as normalized:
             match = pyautogui.locate(label, normalized, grayscale=True, confidence=0.78)
     if match is None:
         return None
 
     x, y = pyautogui.center(match)
-    return left + round(x * scale_x), search_top + round(y * scale_y)
+    _, _, scale_x, scale_y = geometry
+    return region[0] + round(x * scale_x), region[1] + round(y * scale_y)
+
+
+def configure_tesseract():
+    executable = shutil.which('tesseract')
+    if executable is None:
+        program_files = os.environ.get('ProgramFiles', r'C:\Program Files')
+        executable = os.path.join(program_files, 'Tesseract-OCR', 'tesseract.exe')
+        if not os.path.isfile(executable):
+            return False
+    pytesseract.pytesseract.tesseract_cmd = executable
+    return True
+
+
+def match_state_from_text(text):
+    text = ' '.join(text.upper().split())
+    if re.search(r'\b(?:SQUAD ELIMINATED|MATCH SUMMARY|REQUEUE)\b', text):
+        return 'results'
+    if re.search(r'\b(?:SPECTATE|AWAITING RECOVERY|AWAITING RESPAWN|NEXT TEAMMATE)\b', text):
+        return 'spectating'
+    if re.search(r'\bNEXT[\s:-]*(?:LVL[\s:.]*[\d,.]+\s*)?EVO\b', text):
+        return 'playing'
+    return None
+
+
+def read_match_hud(geometry):
+    with pyautogui.screenshot(region=window_region(geometry, (0, 0, 1920, 1080))) as screenshot:
+        with screenshot.resize((1920, 1080), Image.Resampling.BICUBIC) as frame:
+            with Image.new('L', (1480, 710)) as hud:
+                hud.paste(frame.crop((440, 0, 1920, 320)), (0, 0))
+                hud.paste(frame.crop((0, 700, 520, 1080)), (0, 330))
+                with hud.resize((2220, 1065), Image.Resampling.BICUBIC) as enlarged:
+                    with enlarged.point(lambda value: 0 if value >= 170 else 255) as text_image:
+                        text = pytesseract.image_to_string(text_image, lang='eng', config='--psm 11', timeout=2)
+    return match_state_from_text(text)
+
+
+def detect_match_state(window):
+    global hud_ocr_available, last_hud_window, next_hud_read, last_hud_state
+    geometry = active_window_geometry(window)
+    if geometry is None:
+        last_hud_window = None
+        return None
+
+    now = time.monotonic()
+    if hud_ocr_available and (window != last_hud_window or now >= next_hud_read):
+        last_hud_window = window
+        next_hud_read = now + 1
+        last_hud_state = None
+        try:
+            last_hud_state = read_match_hud(geometry)
+        except (pytesseract.TesseractNotFoundError, pytesseract.TesseractError):
+            hud_ocr_available = False
+            print('Tesseract OCR unavailable. Using the bundled HUD image.', flush=True)
+        except RuntimeError:
+            pass  # Retry after an OCR timeout.
+
+    if last_hud_state is not None:
+        return last_hud_state
+
+    region = window_region(geometry, (255, 885, 172, 81))
+    with pyautogui.screenshot(region=region) as screenshot:
+        with screenshot.resize((172, 81), Image.Resampling.BICUBIC) as normalized:
+            match = pyautogui.locate(resource_path('ss/InGame.png'), normalized,
+                                    grayscale=True, confidence=0.5)
+    return 'playing' if match is not None else None
+
+
+def perform_match_input():
+    key = random.choice(activity_keys)
+    if key in movement_keys:
+        keyboard.press(key)
+        try:
+            time.sleep(0.5)
+        finally:
+            keyboard.release(key)
+    else:
+        keyboard.press_and_release(key)
+    delay = (5.5, 6) if key == heal_key else (0.6, 1.5)
+    time.sleep(np.random.uniform(*delay))
+
+
+def squad_eliminated():
+    region = (441, 19, 1017, 304)
+    return (
+        pyautogui.locateOnScreen(resource_path('ss/dead.png'), region=region,
+                                 grayscale=True, confidence=0.6) is not None
+        or pyautogui.locateOnScreen(resource_path('ss/2ndplace.png'), region=region,
+                                    confidence=0.6) is not None
+    )
+
+
+def requeue_prompt_visible():
+    return pyautogui.locateOnScreen(resource_path('ss/requeue2.png'),
+                                    region=(1418, 0, 500, 103), grayscale=False, confidence=0.8) is not None
 
 
 if sys.argv[1:] == ['--build-check']:
@@ -129,15 +237,16 @@ if leader=='FALSE':
     friend1='None'
     friend2='None'
 
-#------------------
-if (custom_key1 == '') and (custom_key2 == ''):
-    Random = ['w','a','s','d',crouch_key,heal_key,ability_key]
-elif custom_key1 == '':
-    Random = ['w','a','s','d',crouch_key,heal_key,ability_key,custom_key2]
-elif custom_key2 == '':
-    Random = ['w','a','s','d',crouch_key,heal_key,ability_key,custom_key1]
-else:
-    Random = ['w','a','s','d',crouch_key,heal_key,ability_key,custom_key1,custom_key2]
+movement_keys = ('w', 'a', 's', 'd')
+configured_keys = (crouch_key, heal_key, ability_key, custom_key1, custom_key2)
+activity_keys = (*movement_keys, *(key for key in configured_keys if key))
+hud_ocr_available = configure_tesseract()
+last_hud_window = None
+next_hud_read = 0.0
+last_hud_state = None
+previous_match_state = None
+if not hud_ocr_available:
+    print('Install Tesseract to detect the NEXT EVO HUD text.', flush=True)
 
 exp_read=0
 matchmaking=0
@@ -149,6 +258,9 @@ window_found = 0
 if requeue==1 and show_exp==1:
     show_exp=0
     text="due to requeue is 1"
+elif show_exp==1 and not hud_ocr_available:
+    show_exp=0
+    text="because Tesseract is unavailable"
 else:
     text=""
 exp=0
@@ -305,11 +417,10 @@ while True:
             pyautogui.moveTo(200,100)
             window_found = 1
             
-        if pyautogui.locateOnScreen(resource_path('ss\\InGame.png'), region=(255, 885, 172, 81), grayscale=True, confidence=0.5) is not None:
-            print(UP, end=CLEAR)
-            print("------------------------------DETECTED IN MATCH, MOVING TO FARMING MODE-----------------------------")
+        if detect_match_state(apex_hwnd) is not None:
             time_stuck_start= 0
             mod = 3
+            break
 
         if pyautogui.locateOnScreen(resource_path('ss\\gameopen.png'), grayscale=True, confidence=0.7) != None:
             pyautogui.click(956, 647)
@@ -399,6 +510,23 @@ while True:
     
     #program loop
     while mod == 3:
+        match_state = detect_match_state(apex_hwnd)
+        if match_state == 'spectating' and (squad_eliminated() or requeue_prompt_visible()):
+            match_state = 'results'
+        if match_state != previous_match_state:
+            if match_state == 'playing':
+                print('In-match HUD detected. Starting movement.', flush=True)
+            elif match_state == 'spectating':
+                print('Spectating. Waiting for respawn or match results.', flush=True)
+            previous_match_state = match_state
+
+        if match_state == 'playing':
+            perform_match_input()
+            continue
+        if match_state == 'spectating':
+            time.sleep(0.8)
+            continue
+
         if pyautogui.locateOnScreen(resource_path('ss\\trios.png'), region=(gamemode_coords), grayscale=True, confidence=0.7) != None:
             gamemode_set=1
             apex_hwnd = win32gui.FindWindow(None,'Apex Legends')
@@ -513,18 +641,8 @@ while True:
                 keyboard.press_and_release('space')
                 time.sleep(np.random.uniform(0.4,0.8))
             
-            if pyautogui.locateOnScreen(resource_path('ss\\InGame.png'), region=(255, 885, 172, 81), grayscale=True, confidence=0.5) is not None:
-                #print("-------------In game waiting--------------")
-                keyboard.press_and_release(Random)
-                time.sleep(0.5)
-                ingame = 1
-                if '4' in Random:
-                    time.sleep(np.random.uniform(5.5,6))
-                else:
-                    time.sleep(np.random.uniform(0.6, 1.5)) 
-            else: ingame = 0
             if requeue!=1:
-                if pyautogui.locateOnScreen(resource_path('ss\\dead.png'), region=(441,19,1017,304), grayscale=True, confidence=0.6) or pyautogui.locateOnScreen(resource_path('ss\\2ndplace.png'), region=(441,19,1017,304), confidence=0.6) != None:
+                if squad_eliminated():
                     #print("dead")
                     time.sleep(np.random.uniform(0.3,0.5))
                     keyboard.press_and_release('space')
@@ -652,7 +770,7 @@ while True:
                                         time.sleep(np.random.uniform(0.4,0.7))
                                         break
                                 break
-            if pyautogui.locateOnScreen(resource_path('ss\\requeue2.png'), region=(1418,0,500,103), grayscale=False, confidence=0.8) != None:    
+            if requeue_prompt_visible():
                 keyboard.press_and_release('1')
                 time.sleep(np.random.uniform(0.4,0.8))
                 
@@ -688,7 +806,7 @@ while True:
                 print ('           |    RESTART TIME   | -> |'," | ",datetime.timedelta(seconds=round(time_lapsed))," / ", datetime.timedelta(seconds=round(timp)),"| ")
                 print("            ‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾‾  ")        
             #checking if time lapsed is more than set time and checking if it's in game
-            if (time_lapsed > timp-600) and (ingame == 0):
+            if time_lapsed > timp-600:
                 time.sleep (15)
                 mod = 4
             if pyautogui.locateOnScreen(resource_path('ss\\afk.png'), region=(588,265,776,536), grayscale=True, confidence=0.8) != None: 

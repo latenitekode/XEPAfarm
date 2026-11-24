@@ -60,6 +60,8 @@ This script automates certain actions in the game using Python libraries such as
 
 New configurations default to `apexdir = steam`. Steam opens Apex from its installed library, including libraries on a secondary drive. For an existing configuration, set `apexdir` in `config.ini` to `steam` or your local executable path.
 
+With Tesseract installed, ApexFarmer can also recognize English `NEXT EVO` and `NEXT LVL: … EVO` HUD text when you start it mid-match. It waits during spectating and looks for match results or the requeue prompt.
+
 ### Windows builds and releases
 
 The GitHub Actions workflow builds `ApexFarmer.exe` with the image assets on Windows and uploads it as a workflow artifact. Push a version tag such as `v2.4.1` to publish the verified executable in a GitHub release.
