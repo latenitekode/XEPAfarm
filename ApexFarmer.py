@@ -245,6 +245,8 @@ last_hud_window = None
 next_hud_read = 0.0
 last_hud_state = None
 previous_match_state = None
+SPECTATOR_SPACE_INTERVAL = 15
+next_spectator_space = 0.0
 if not hud_ocr_available:
     print('Install Tesseract to detect the NEXT EVO HUD text.', flush=True)
 
@@ -517,13 +519,18 @@ while True:
             if match_state == 'playing':
                 print('In-match HUD detected. Starting movement.', flush=True)
             elif match_state == 'spectating':
-                print('Spectating. Waiting for respawn or match results.', flush=True)
+                next_spectator_space = time.monotonic() + SPECTATOR_SPACE_INTERVAL
+                print('Spectating. Tapping Space every 15 seconds.', flush=True)
             previous_match_state = match_state
 
         if match_state == 'playing':
             perform_match_input()
             continue
         if match_state == 'spectating':
+            now = time.monotonic()
+            if now >= next_spectator_space and win32gui.GetForegroundWindow() == apex_hwnd:
+                keyboard.press_and_release('space')
+                next_spectator_space = now + SPECTATOR_SPACE_INTERVAL
             time.sleep(0.8)
             continue
 
