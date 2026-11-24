@@ -54,9 +54,15 @@ This script automates certain actions in the game using Python libraries such as
 
 ## Installation
 - WINDOWS installation
-    1. Download executable from [release](https://github.com/letsmokee/ApexXPFarmer/releases/)
+    1. Download `ApexFarmer.exe` from the [latest release](../../releases/latest).
     2. Run the executable, on first run it will generate a config.ini file which you need to edit with your Apex directory and time for restart
     3. Follow the on screen instructions
+
+New configurations default to `apexdir = steam`. Steam opens Apex from its installed library, including libraries on a secondary drive. For an existing configuration, set `apexdir` in `config.ini` to `steam` or your local executable path.
+
+### Windows builds and releases
+
+The GitHub Actions workflow builds `ApexFarmer.exe` with the image assets on Windows and uploads it as a workflow artifact. Push a version tag such as `v2.4.1` to publish the verified executable in a GitHub release.
        
 ## CONFIG.INI
  ```

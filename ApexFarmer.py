@@ -1,4 +1,5 @@
 import configparser
+import csv
 import ctypes
 from pyautogui import *
 import pyautogui
@@ -18,8 +19,23 @@ import pytesseract
 import cv2
 import rainbowtext
 from inputimeout import inputimeout, TimeoutOccurred
+from pathlib import PureWindowsPath
 from pynput.keyboard import Key, Controller
 
+# The screen checks use None to represent a template that is not visible.
+pyautogui.useImageNotFoundException(False)
+
+
+def resource_path(relative_path):
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
+
+if sys.argv[1:] == ['--build-check']:
+    for asset in ('ss/InGame.png', 'legends/Lifeline.png'):
+        if not os.path.isfile(resource_path(asset)):
+            sys.exit(f'Missing bundled image: {asset}')
+    print('ApexFarmer build check passed.')
+    sys.exit(0)
 
 # instantiate
 
@@ -29,7 +45,7 @@ ctypes.windll.kernel32.SetConsoleTitleW("APEX XP FARM BOT BY LETSMOKE")
 config = configparser.ConfigParser()
 if os.path.isfile('config.ini') is not True:
     config['CONFIG'] = {'Time': '9000',
-                     'ApexDir': r'C:\Program Files\EA Games\Apex\\r5apex.exe',
+                     'ApexDir': 'steam',
                      'OCR_debug': '0',
                      'show_exp': '1',
                      'Gamemode': 'Trios',
@@ -53,7 +69,7 @@ elif os.path.isfile('config.ini') is True:
 
 # read values from a section
 timp = int(config.get('CONFIG', 'Time'))
-apexdir = str(config.get('CONFIG', 'ApexDir'))
+apexdir = config.get('CONFIG', 'ApexDir').strip().strip('"')
 OCR_debug = int(config.get('CONFIG', 'OCR_debug'))
 show_exp = int(config.get('CONFIG', 'show_exp'))
 champion = str(config.get('CONFIG', 'Champion'))
@@ -180,27 +196,28 @@ print(UP, end=CLEAR)
 time.sleep(0.005)
 print("Continuing...")
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
-    try:
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
-
-#checking if apex is running
-def process_exists(process_name):
-    progs = str(subprocess.check_output('tasklist'))
-    if process_name in progs:
-        return True
+def launch_apex(executable):
+    path_parts = PureWindowsPath(executable.casefold()).parts
+    if executable.casefold() == 'steam' or 'steamapps' in path_parts:
+        os.startfile('steam://rungameid/1172470')
     else:
-        return False
+        subprocess.Popen([executable])
+
+APEX_PROCESS_NAMES = {'r5apex.exe', 'r5apex_dx12.exe'}
+
+
+def running_apex_processes():
+    task_list = subprocess.check_output(
+        ['tasklist', '/fo', 'csv', '/nh'], text=True, errors='replace'
+    )
+    image_names = {row[0].casefold() for row in csv.reader(task_list.splitlines()) if row}
+    return APEX_PROCESS_NAMES & image_names
+
 
 start_time_absolute = time.time()
 
-if process_exists('r5apex.exe'):
+if running_apex_processes():
+    print('Apex Legends is already running. Looking for its window...', flush=True)
     mod = 2
     start_time = time.time()
     time_stuck_start= time.time()
@@ -214,13 +231,10 @@ while True:
     time.sleep(0.005)
     #starting game, make apex window active, starting counting for game restart
     if mod == 1:
-        if process_exists('r5apex.exe') is False:
+        if not running_apex_processes():
             print(UP, end=CLEAR)
             print ("------------------------------------GAME NOT STARTED, STARTING-------------------------------------")
-            if apexdir=='steam':
-                subprocess.run("start steam://rungameid/1172470", shell=True)
-            else:
-                subprocess.call([apexdir])
+            launch_apex(apexdir)
         start_time = time.time()
         time_stuck_start= time.time()
         time_stuck_end=0
@@ -645,9 +659,7 @@ while True:
                 window_found = 0
                 mod = 2
                 
-            if process_exists('r5apex.exe'):
-                pass
-            else: 
+            if not running_apex_processes():
                 print(UP, end=CLEAR)
                 print(UP, end=CLEAR)
                 print(UP, end=CLEAR)
@@ -713,7 +725,8 @@ while True:
 #checking if apex is running 
 
     if mod == 4:
-        os.system('taskkill /f /im r5apex.exe')
+        for image_name in running_apex_processes():
+            subprocess.run(['taskkill', '/f', '/im', image_name], check=False)
         time.sleep(5)
         print(UP, end=CLEAR)
         time.sleep(10)
